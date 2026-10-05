@@ -21,10 +21,11 @@ export class CodingNode {
         }
 
         
-        const changes = await this.codingGraph.implement(state.ticket, state.plan, state.researchResult);
+        const result = await this.codingGraph.implement(state.ticket, state.plan, state.researchResult);
 
         return {
-            changes,
+            changes: result.summary,
+            codingWriteCount: result.writeCount,
         }
     }
 }

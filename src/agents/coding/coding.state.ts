@@ -15,13 +15,11 @@ export const CodingState = Annotation.Root({
 
     summary: Annotation<string | undefined>(),
 
-    toolCallHistory: Annotation<string[]>({
-        reducer: (current, update) => [
-            ...current,
-            ...update,
-        ],
-        default: () => [],
+    writeCount: Annotation<number>({
+        reducer: (current, update) => current + update,
+        default: () => 0,
     }),
+    
 })
 
 export type CodingStateType = typeof CodingState.State;

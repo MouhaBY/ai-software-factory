@@ -8,6 +8,7 @@ import { ArchitectNode } from './nodes/architect.node.js';
 import { CodingNode } from './nodes/coding.node.js';
 import { QaNode } from './nodes/qa.nodes.js';
 import { PlanValidatorNode } from './nodes/plan-validator.node.js';
+import { ImplementationGateNode } from './nodes/implementation-gate.node.js';
 
 @Module({
     imports: [
@@ -22,6 +23,7 @@ import { PlanValidatorNode } from './nodes/plan-validator.node.js';
         CodingNode,
         QaNode,
         PlanValidatorNode,
+        ImplementationGateNode,
     ],
     exports: [
         WorkflowService,

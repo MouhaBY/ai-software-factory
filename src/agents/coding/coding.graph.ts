@@ -8,6 +8,11 @@ import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages
 import { ImplementationPlan } from "../architect/architect.schema.js";
 import { ResearchResult } from "../research/research.schema.js";
 
+export interface CodingExecutionResult {
+  summary: string;
+  writeCount: number;
+}
+
 @Injectable()
 export class CodingGraph {
     private readonly graph;
@@ -114,18 +119,67 @@ export class CodingGraph {
                 `[CODING] iteration ${state.iterations + 1}`,
             );
 
+            const messages = [
+                ...state.messages,
+            ];
+
+            if (
+                state.iterations >=
+                MAX_EXPLORATION_ITERATIONS &&
+                state.writeCount === 0
+            ) {
+                console.warn(
+                    '[CODING] Exploration budget exhausted. Forcing implementation phase.',
+                );
+
+                messages.push(
+                    new SystemMessage(`
+                        IMPLEMENTATION PHASE REQUIRED.
+
+                        You have already inspected enough repository context.
+
+                        Repository discovery has already been performed by
+                        the Research Agent.
+
+                        You must now implement the approved plan.
+
+                        Do NOT continue repository exploration.
+
+                        Use read_file only if absolutely necessary for a target file.
+
+                        Your next actions must prioritize write_file.
+
+                        Do not finish without attempting the implementation.
+                    `),
+                );
+            }
+
             try {
-                const response = await this.llmService.invokeWithRetry(() => model.invoke(state.messages));
+                const response = await this.llmService.invokeWithRetry(() => model.invoke(messages));
 
                 const toolCalls = response.tool_calls ?? [];
 
-                const toolCallHistory = toolCalls.map((call) => `${call.name}:${JSON.stringify(call.args)}`);
+                const writeCalls = toolCalls.filter(
+                    (call) =>
+                        call.name === 'write_file',
+                );
+
+                console.log(
+                    '[CODING] tool calls:',
+                    toolCalls.map(
+                        (call) => ({
+                            name: call.name,
+                            args: call.args,
+                        }),
+                    ),
+                );
 
                 return {
                     messages: [response],
                     iterations: 1,
-                    toolCallHistory,
+                    writeCount: writeCalls.length,
                 };
+
             } catch (error) {
                 console.error(
                     '[CODING] callModel failed',
@@ -138,23 +192,8 @@ export class CodingGraph {
 
         }
 
-        function hasRepeatedToolCall(
-            history: string[],
-        ): boolean {
-            if (history.length < 2) {
-                return false;
-            }
-
-            const last =
-                history.at(-1);
-
-            const previous =
-                history.slice(0, -1);
-
-            return previous.includes(last!);
-        }
-
         const MAX_ITERATIONS = 12;
+        const MAX_EXPLORATION_ITERATIONS = 5;
 
         const shouldContinue = (
             state: CodingStateType,
@@ -163,7 +202,8 @@ export class CodingGraph {
                 state.messages.at(-1);
 
             console.log(
-                `[CODING] iterations: ${state.iterations}/${MAX_ITERATIONS}`,
+                `[CODING] iterations: ` +
+                `${state.iterations}/${MAX_ITERATIONS}`,
             );
 
             if (
@@ -171,18 +211,6 @@ export class CodingGraph {
             ) {
                 console.warn(
                     '[CODING] Maximum iterations reached',
-                );
-
-                return 'finalize';
-            }
-
-            if (
-                hasRepeatedToolCall(
-                    state.toolCallHistory,
-                )
-            ) {
-                console.warn(
-                    '[CODING] Repeated tool call detected',
                 );
 
                 return 'finalize';
@@ -204,7 +232,6 @@ export class CodingGraph {
                 );
                 return 'tools';
             }
-            console.log('→ END');
 
             return 'finalize';
         };
@@ -245,31 +272,34 @@ export class CodingGraph {
         ticket: string,
         plan: ImplementationPlan,
         research?: ResearchResult,
-    ): Promise<string> {
+    ): Promise<CodingExecutionResult> {
         const result = await this.graph.invoke({
             messages: [
                 new SystemMessage(`
-                    You are a senior software engineer implementing
-                    an approved implementation plan.
+                    You are a senior software engineer responsible ONLY
+                    for implementing an approved implementation plan.
 
-                    The repository has ALREADY been researched.
+                    Repository discovery has already been completed by
+                    the Research Agent.
 
-                    STRICT EXECUTION RULES:
+                    The Architect has already selected the files involved.
 
-                    - Use REPOSITORY RESEARCH as your primary repository context.
-                    - Use IMPLEMENTATION PLAN as the source of implementation tasks.
-                    - Do NOT explore the repository from scratch.
-                    - Do NOT repeatedly list the repository root.
-                    - Start by reading files listed in filesToModify.
-                    - Read additional files only when directly necessary.
-                    - Once you understand a target file, modify it.
-                    - Prioritize implementation over exploration.
-                    - Never invent repository files.
-                    - Keep changes minimal and focused.
-                    - Preserve existing project conventions.
-                    - Never modify environment files or secrets.
-                    - Do not execute shell commands.
-                    - Do not perform Git operations.
+                    YOUR RESPONSIBILITY IS IMPLEMENTATION, NOT RESEARCH.
+
+                    Rules:
+
+                    1. Read the files listed in IMPLEMENTATION PLAN.filesToModify.
+                    2. Understand their current content.
+                    3. Implement the requested changes using write_file.
+                    4. Modify only files required by the approved plan.
+                    5. Preserve existing project conventions.
+                    6. Do not invent repository files.
+                    7. Do not restart repository exploration.
+                    8. Do not finish merely because some information is missing.
+                    Use the provided repository research and target files.
+                    9. After reading the necessary target files, proceed to write_file.
+                    10. The task is NOT complete until the required implementation
+                        has been attempted.
                 `),
 
                 new HumanMessage(`
@@ -280,18 +310,25 @@ export class CodingGraph {
                     VERIFIED REPOSITORY RESEARCH:
 
                     ${JSON.stringify(
-                    research,
-                    null,
-                    2,
+                        research,
+                        null,
+                        2,
                     )}
 
                     APPROVED IMPLEMENTATION PLAN:
 
-                    ${JSON.stringify(plan, null, 2)}
+                    ${JSON.stringify(
+                        plan,
+                        null,
+                        2,
+                    )}
 
                     Implement the approved plan now.
-                `),
+                `)
             ],
+            iterations: 0,
+
+            writeCount: 0,
         },
             {
                 recursionLimit: 30,
@@ -304,7 +341,10 @@ export class CodingGraph {
             );
         }
 
-        return result.summary;
+        return {
+            summary: result.summary,
+            writeCount: result.writeCount ?? 0,
+        };
 
     }
 

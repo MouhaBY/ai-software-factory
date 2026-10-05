@@ -15,6 +15,8 @@ export const WorkflowState = Annotation.Root({
 
     changes: Annotation<string | undefined>(),
 
+    codingWriteCount: Annotation<number>(),
+
     qaResult: Annotation<QaResult | undefined>(),
 
 });

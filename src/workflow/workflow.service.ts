@@ -7,6 +7,7 @@ import { ArchitectNode } from "./nodes/architect.node.js";
 import { CodingNode } from "./nodes/coding.node.js";
 import { QaNode } from "./nodes/qa.nodes.js";
 import { PlanValidatorNode } from "./nodes/plan-validator.node.js";
+import { ImplementationGateNode } from "./nodes/implementation-gate.node.js";
 
 @Injectable()
 export class WorkflowService {
@@ -19,6 +20,7 @@ export class WorkflowService {
         private readonly codingNode: CodingNode,
         private readonly qaNode: QaNode,
         private readonly planValidatorNode: PlanValidatorNode,
+        private readonly implementationGateNode: ImplementationGateNode,
     ) {
         this.graph = new StateGraph(WorkflowState)
         .addNode(
@@ -47,6 +49,13 @@ export class WorkflowService {
                 this.planValidatorNode,
             ),
         )
+        .addNode(
+            'implementationGate',
+            this.implementationGateNode.execute.bind(
+                this.implementationGateNode,
+            ),
+        )
+ 
         .addEdge(START, 'analyst')
         .addEdge('analyst', 'research')
         .addEdge('research', 'architect')
@@ -58,7 +67,14 @@ export class WorkflowService {
             'planValidator',
             'coding',
         )
-        .addEdge('coding', 'qa')
+        .addEdge(
+        'coding',
+        'implementationGate',
+        )
+        .addEdge(
+        'implementationGate',
+        'qa',
+        )        
         .addEdge('qa', END)
         .compile();
     }

@@ -19,9 +19,7 @@ export class RepositoryToolsService {
 
     getCodingTools() {
         return [
-            createlistFilesTool(this.workspace),
             createReadFileTool(this.workspace),
-            createSearchCodeTool(this.workspace),
             createWriteFileTool(this.workspace),
         ]
     }
