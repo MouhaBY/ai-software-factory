@@ -6,11 +6,17 @@ import { ToolsModule } from '../tools/tools.module.js';
 import { ResearchGraph } from './research/research.graph.js';
 import { ArchitectAgent } from './architect/architect.agent.js';
 import { CodingGraph } from './coding/coding.graph.js';
+import { QaService } from './qa/qa.service.js';
 
 @Module({
     imports: [LlmModule, ToolsModule],
-    providers: [AnalystAgent, ResearchGraph, ArchitectAgent, CodingGraph],
-    exports: [AnalystAgent, ResearchGraph, ArchitectAgent, CodingGraph],
+    providers: [
+        AnalystAgent, ResearchGraph, ArchitectAgent, CodingGraph, QaService,
+    ],
+    exports: [
+        AnalystAgent, ResearchGraph, ArchitectAgent, CodingGraph, QaService,
+
+    ],
     controllers: [AnalystController],
 })
 export class AgentsModule { }

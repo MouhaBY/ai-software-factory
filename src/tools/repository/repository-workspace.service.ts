@@ -39,4 +39,8 @@ export class RepositoryWorkspaceService {
 
         return resolvedPath;
     }
+
+    getRootPath(): string {
+        return this.rootPath;
+    }
 }

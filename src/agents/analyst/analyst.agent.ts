@@ -11,7 +11,7 @@ export class AnalystAgent {
     async analyze(ticket: string): Promise<AnalysisResult> {
         const structuredModel = this.llmService.model.withStructuredOutput(AnalysisSchema);
 
-        return this.llmService.invokeWithRateLimit(() => structuredModel.invoke([
+        return this.llmService.invokeWithRetry(() => structuredModel.invoke([
             {
                 role: 'system',
                 content: `

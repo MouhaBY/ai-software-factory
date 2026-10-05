@@ -5,6 +5,7 @@ import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { ResearchState, ResearchStateType } from "./research.state.js";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { END, START, StateGraph } from "@langchain/langgraph";
+import { ResearchResult, ResearchResultSchema } from "./research.schema.js";
 
 @Injectable()
 export class ResearchGraph {
@@ -16,7 +17,10 @@ export class ResearchGraph {
     ) {
         const tools = this.repositoryTools.getResearchTools();
         const toolNode = new ToolNode(tools);
-        const model = this.llmService.model.bindTools(tools);
+        const model = this.llmService.model.bindTools(tools, {
+            tool_choice: 'auto',
+            parallel_tool_calls: false,
+        },);
 
         const callModel = async (state: ResearchStateType) => {
 
@@ -25,7 +29,7 @@ export class ResearchGraph {
             );
 
             try {
-                const response = await this.llmService.invokeWithRateLimit(() => model.invoke(state.messages));
+                const response = await this.llmService.invokeWithRetry(() => model.invoke(state.messages));
                 return {
                     messages: [response],
                     iterations: 1,
@@ -44,28 +48,28 @@ export class ResearchGraph {
 
         const shouldContinue = (
             state: ResearchStateType,
-        ): 'tools' | '__end__' => {
+        ): 'tools' | 'finalize' => {
             if (state.iterations >= MAX_ITERATIONS) {
                 console.warn(
                     '[RESEARCH] Maximum iterations reached',
                 );
 
-            return END;
-        }
+                return 'finalize';
+            }
             const lastMessage =
                 state.messages[
                 state.messages.length - 1
                 ];
 
-                if (AIMessage.isInstance(lastMessage)) {
-                    console.log(
-                        '[RESEARCH] tool calls:',
-                        lastMessage.tool_calls?.map((call) => ({
-                            name: call.name,
-                            args: call.args,
-                        })),
-                    );
-                }
+            if (AIMessage.isInstance(lastMessage)) {
+                console.log(
+                    '[RESEARCH] tool calls:',
+                    lastMessage.tool_calls?.map((call) => ({
+                        name: call.name,
+                        args: call.args,
+                    })),
+                );
+            }
 
             if (
                 AIMessage.isInstance(lastMessage) &&
@@ -74,10 +78,85 @@ export class ResearchGraph {
                 return 'tools';
             }
 
-            console.log('→ END');
-
-            return END;
+            return 'finalize';
         };
+
+        const finalize = async (
+            state: ResearchStateType,
+        ) => {
+            console.log('[RESEARCH] finalizing...');
+
+            const recentMessages =
+                state.messages
+                    .slice(-12)
+                    .map((message) => {
+                        const content =
+                            typeof message.content === 'string'
+                                ? message.content
+                                : JSON.stringify(
+                                    message.content,
+                                );
+
+                        if (
+                            AIMessage.isInstance(message) &&
+                            message.tool_calls?.length
+                        ) {
+                            const calls =
+                                message.tool_calls.map(
+                                    (call) =>
+                                        `${call.name}(${JSON.stringify(
+                                            call.args,
+                                        )})`,
+                                );
+
+                            return [
+                                'AI requested:',
+                                ...calls,
+                            ].join('\n');
+                        }
+
+                        return `${message.constructor.name}:\n${content}`;
+                    })
+                    .join('\n\n');
+
+            const structuredModel = this.llmService.model.withStructuredOutput(
+                ResearchResultSchema,
+            );
+
+            const result =
+                await this.llmService.invokeWithRetry(
+                    () =>
+                        structuredModel.invoke([
+                            new SystemMessage(`
+                        You are a repository research reporting component.
+
+                        You cannot use tools.
+                        You cannot inspect additional files.
+
+                        Your job is to transform verified repository exploration
+                        information into a structured repository research report.
+
+                        IMPORTANT:
+                        - Never invent files.
+                        - Only include files that were actually observed.
+                        - Paths must exactly match paths found during repository exploration.
+                        - If information is unknown, omit it rather than guessing.
+                                `),
+
+                            new HumanMessage(`
+                        REPOSITORY EXPLORATION:
+
+                        ${recentMessages}
+
+                        Create the final repository research report.
+                                `),
+                        ]),
+                );
+
+            return {
+                result,
+            };
+        }
 
         this.graph =
             new StateGraph(ResearchState)
@@ -90,6 +169,10 @@ export class ResearchGraph {
                 .addNode(
                     'tools',
                     toolNode,
+                )
+                .addNode(
+                    'finalize',
+                    finalize,
                 )
 
                 .addEdge(
@@ -106,6 +189,10 @@ export class ResearchGraph {
                     'tools',
                     'agent',
                 )
+                .addEdge(
+                    'finalize',
+                    END,
+                )
 
                 .compile();
 
@@ -113,7 +200,7 @@ export class ResearchGraph {
 
     async research(
         ticket: string,
-    ): Promise<string> {
+    ): Promise<ResearchResult> {
         const result =
             await this.graph.invoke({
                 messages: [
@@ -158,13 +245,17 @@ export class ResearchGraph {
                 recursionLimit: 20,
             });
 
-        const lastMessage =
-            result.messages[
-            result.messages.length - 1
-            ];
+        if (!result.result) {
+            throw new Error(
+                'Research graph did not produce a result',
+            );
+        }
 
-        return typeof lastMessage.content === 'string'
-            ? lastMessage.content
-            : JSON.stringify(lastMessage.content);
+        console.log(
+            '[RESEARCH] Relevant files:',
+            result.result.relevantFiles,
+        );
+
+        return result.result;
     }
 }

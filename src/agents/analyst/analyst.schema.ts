@@ -12,7 +12,7 @@ export const AnalysisSchema = z.object({
     summary: z.string(),
     requirements: z.array(z.string()),
     acceptanceCriteria: z.array(z.string()),
-    secutitySensitive: z.boolean(),
+    securitySensitive: z.boolean(),
     requiresResearch: z.boolean(),
 
 });

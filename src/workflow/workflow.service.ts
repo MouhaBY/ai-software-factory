@@ -5,6 +5,8 @@ import { WorkflowState, WorkflowStateType } from "./workflow.state.js";
 import { ResearchNode } from "./nodes/research.node.js";
 import { ArchitectNode } from "./nodes/architect.node.js";
 import { CodingNode } from "./nodes/coding.node.js";
+import { QaNode } from "./nodes/qa.nodes.js";
+import { PlanValidatorNode } from "./nodes/plan-validator.node.js";
 
 @Injectable()
 export class WorkflowService {
@@ -15,6 +17,8 @@ export class WorkflowService {
         private readonly researchNode: ResearchNode,
         private readonly architectNode: ArchitectNode,
         private readonly codingNode: CodingNode,
+        private readonly qaNode: QaNode,
+        private readonly planValidatorNode: PlanValidatorNode,
     ) {
         this.graph = new StateGraph(WorkflowState)
         .addNode(
@@ -33,19 +37,30 @@ export class WorkflowService {
             'coding',
             this.codingNode.execute.bind(this.codingNode),
         )
+        .addNode(
+            'qa',
+            this.qaNode.execute.bind(this.qaNode),
+        )
+        .addNode(
+            'planValidator',
+            this.planValidatorNode.execute.bind(
+                this.planValidatorNode,
+            ),
+        )
         .addEdge(START, 'analyst')
-        .addConditionalEdges('analyst', this.routeAfterAnalysis.bind(this))
+        .addEdge('analyst', 'research')
         .addEdge('research', 'architect')
-        .addEdge('architect', 'coding')
-        .addEdge('coding', END)
+        .addEdge(
+            'architect',
+            'planValidator',
+        )
+        .addEdge(
+            'planValidator',
+            'coding',
+        )
+        .addEdge('coding', 'qa')
+        .addEdge('qa', END)
         .compile();
-    }
-
-    private routeAfterAnalysis(state: WorkflowStateType): 'research' | 'architect' {
-        if(state.analysis?.requiresResearch) {
-            return 'research';
-        }
-        return 'architect';
     }
 
     async run(ticket: string){

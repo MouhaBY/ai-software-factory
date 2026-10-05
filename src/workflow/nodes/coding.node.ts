@@ -13,11 +13,18 @@ export class CodingNode {
         if(!state.plan){
             throw new Error("Implementation plan is missing in the state.");
         }
+
+        if (!state.researchResult) {
+            throw new Error(
+            'Repository research is required',
+            );
+        }
+
         
-        const codingResult = await this.codingGraph.implement(state.ticket, state.plan, state.researchResult);
+        const changes = await this.codingGraph.implement(state.ticket, state.plan, state.researchResult);
 
         return {
-            codingResult,
+            changes,
         }
     }
 }

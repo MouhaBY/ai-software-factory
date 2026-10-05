@@ -15,6 +15,7 @@ import {
     ImplementationPlan,
     ImplementationPlanSchema,
 } from './architect.schema.js';
+import { ResearchResult } from '../research/research.schema.js';
 
 @Injectable()
 export class ArchitectAgent {
@@ -25,14 +26,14 @@ export class ArchitectAgent {
     async createPlan(
         ticket: string,
         analysis: AnalysisResult,
-        researchResult?: string,
+        researchResult: ResearchResult,
     ): Promise<ImplementationPlan> {
         const model =
             this.llmService.model.withStructuredOutput(
                 ImplementationPlanSchema,
             );
 
-        return this.llmService.invokeWithRateLimit(() => model.invoke([
+        return this.llmService.invokeWithRetry(() => model.invoke([
             new SystemMessage(`
                 You are a senior software architect.
 
@@ -52,18 +53,24 @@ export class ArchitectAgent {
             `),
 
             new HumanMessage(`
-SOFTWARE TICKET:
+                SOFTWARE TICKET:
 
-${ticket}
+                ${ticket}
 
-ANALYSIS:
+                ANALYSIS:
 
-${JSON.stringify(analysis, null, 2)}
+                ${JSON.stringify(analysis, null, 2)}
 
-REPOSITORY RESEARCH:
+                VERIFIED REPOSITORY RESEARCH:
 
-${researchResult ?? 'No repository research was required.'}
-      `),
+                ${JSON.stringify(
+                    researchResult,
+                    null,
+                    2,
+                )}
+
+                Create the implementation plan.
+            `),
         ]));
     }
 }

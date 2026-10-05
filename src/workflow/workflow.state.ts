@@ -1,19 +1,21 @@
 import { Annotation } from "@langchain/langgraph";
 import { AnalysisResult } from "../agents/analyst/analyst.schema.js";
 import { ImplementationPlan } from "../agents/architect/architect.schema.js";
-import { CodingResult } from "../agents/coding/coding.schema.js";
+import { QaResult } from "../agents/qa/qa.schema.js";
+import { ResearchResult } from "../agents/research/research.schema.js";
 
 export const WorkflowState = Annotation.Root({
     ticket: Annotation<string>(),
 
     analysis: Annotation<AnalysisResult | undefined>(),
 
-    researchResult: Annotation<string | undefined>(),
+    researchResult: Annotation<ResearchResult | undefined>(),
 
     plan: Annotation<ImplementationPlan | undefined>(),
 
-    // codingResult: Annotation<CodingResult | undefined>(),
-    codingResult: Annotation<string | undefined>(),
+    changes: Annotation<string | undefined>(),
+
+    qaResult: Annotation<QaResult | undefined>(),
 
 });
 

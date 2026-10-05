@@ -6,7 +6,7 @@ import { CodingState, CodingStateType } from "./coding.state.js";
 import { END, START, StateGraph } from "@langchain/langgraph";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ImplementationPlan } from "../architect/architect.schema.js";
-import { CodingResult, CodingResultSchema } from "./coding.schema.js";
+import { ResearchResult } from "../research/research.schema.js";
 
 @Injectable()
 export class CodingGraph {
@@ -18,11 +18,12 @@ export class CodingGraph {
     ) {
         const tools = this.repositoryTools.getCodingTools();
         const toolNode = new ToolNode(tools);
-        const model = this.llmService.model.bindTools(tools);
-
-        // const finalModel = this.llmService.model.withStructuredOutput(
-        //     CodingResultSchema,
-        // );
+        const model = this.llmService.model.bindTools(tools,
+            {
+                tool_choice: 'auto',
+                parallel_tool_calls: false,
+            },
+        );
 
         const finalModel = this.llmService.model;
 
@@ -33,39 +34,38 @@ export class CodingGraph {
                 state.messages
                     .slice(-8)
                     .map((message) => {
-                    const content =
-                        typeof message.content === 'string'
-                        ? message.content
-                        : JSON.stringify(
-                            message.content,
-                            );
+                        const content =
+                            typeof message.content === 'string'
+                                ? message.content
+                                : JSON.stringify(
+                                    message.content,
+                                );
 
-                    if (
-                        AIMessage.isInstance(message) &&
-                        message.tool_calls?.length
-                    ) {
-                        const calls =
-                        message.tool_calls.map(
-                            (call) =>
-                            `${call.name}(${JSON.stringify(
-                                call.args,
-                            )})`,
-                        );
+                        if (
+                            AIMessage.isInstance(message) &&
+                            message.tool_calls?.length
+                        ) {
+                            const calls =
+                                message.tool_calls.map(
+                                    (call) =>
+                                        `${call.name}(${JSON.stringify(
+                                            call.args,
+                                        )})`,
+                                );
 
-                        return [
-                        `AI requested operations:`,
-                        ...calls,
-                        ].join('\n');
-                    }
+                            return [
+                                `AI requested operations:`,
+                                ...calls,
+                            ].join('\n');
+                        }
 
-                    return `${
-                        message.constructor.name
-                    }:\n${content}`;
+                        return `${message.constructor.name
+                            }:\n${content}`;
                     })
                     .join('\n\n');
 
 
-            const response = await this.llmService.invokeWithRateLimit(
+            const response = await this.llmService.invokeWithRetry(
                 () => finalModel.invoke([
                     new SystemMessage(`
                         You are a reporting component.
@@ -100,43 +100,13 @@ export class CodingGraph {
 
             const summary =
                 typeof response.content === 'string'
-                ? response.content
-                : JSON.stringify(response.content);
+                    ? response.content
+                    : JSON.stringify(response.content);
 
             return {
                 summary,
             };
 
-            // try { 
-            //     const response = await this.llmService.invokeWithRateLimit(() => finalModel.invoke([
-            //         ...state.messages,
-            //         new HumanMessage(`
-            //             Stop using tools.
-
-            //             Summarize the implementation work performed so far.
-
-            //             Determine whether the implementation plan was fully completed.
-
-            //             If some work could not be completed, set completed=false
-            //             and describe it in remainingWork.
-
-            //             Do not claim that a file was modified unless it was actually
-            //             modified during this execution.
-            //         `),
-            //     ]));
-
-            //     return {
-            //         result: response,
-            //     }
-            // } catch (error) {
-            //     console.error(
-            //         '[CODING] finalize failed',
-            //         error,
-            //     );
-
-            //     throw error;
-            // }
-            
         }
 
         const callModel = async (state: CodingStateType) => {
@@ -144,13 +114,19 @@ export class CodingGraph {
                 `[CODING] iteration ${state.iterations + 1}`,
             );
 
-            try{
-                const response = await this.llmService.invokeWithRateLimit(() => model.invoke(state.messages));
+            try {
+                const response = await this.llmService.invokeWithRetry(() => model.invoke(state.messages));
+
+                const toolCalls = response.tool_calls ?? [];
+
+                const toolCallHistory = toolCalls.map((call) => `${call.name}:${JSON.stringify(call.args)}`);
+
                 return {
                     messages: [response],
                     iterations: 1,
+                    toolCallHistory,
                 };
-            }catch(error){
+            } catch (error) {
                 console.error(
                     '[CODING] callModel failed',
                     error,
@@ -159,10 +135,26 @@ export class CodingGraph {
                 throw error;
             }
 
-            
+
         }
 
-        const MAX_ITERATIONS = 20;
+        function hasRepeatedToolCall(
+            history: string[],
+        ): boolean {
+            if (history.length < 2) {
+                return false;
+            }
+
+            const last =
+                history.at(-1);
+
+            const previous =
+                history.slice(0, -1);
+
+            return previous.includes(last!);
+        }
+
+        const MAX_ITERATIONS = 12;
 
         const shouldContinue = (
             state: CodingStateType,
@@ -178,20 +170,22 @@ export class CodingGraph {
                 state.iterations >= MAX_ITERATIONS
             ) {
                 console.warn(
-                '[CODING] Maximum iterations reached',
+                    '[CODING] Maximum iterations reached',
                 );
 
                 return 'finalize';
             }
 
-            if (AIMessage.isInstance(lastMessage)) {
-                console.log(
-                    '[CODING] tool calls:',
-                    lastMessage.tool_calls?.map((call) => ({
-                        name: call.name,
-                        args: call.args,
-                    })),
+            if (
+                hasRepeatedToolCall(
+                    state.toolCallHistory,
+                )
+            ) {
+                console.warn(
+                    '[CODING] Repeated tool call detected',
                 );
+
+                return 'finalize';
             }
 
             if (
@@ -199,6 +193,15 @@ export class CodingGraph {
                 AIMessage.isInstance(lastMessage) &&
                 lastMessage.tool_calls?.length
             ) {
+                console.log(
+                    '[CODING] tool calls:',
+                    lastMessage.tool_calls.map(
+                        (call) => ({
+                            name: call.name,
+                            args: call.args,
+                        }),
+                    ),
+                );
                 return 'tools';
             }
             console.log('→ END');
@@ -239,38 +242,34 @@ export class CodingGraph {
     }
 
     async implement(
-        ticket : string,
+        ticket: string,
         plan: ImplementationPlan,
-        research?: string,
+        research?: ResearchResult,
     ): Promise<string> {
         const result = await this.graph.invoke({
             messages: [
                 new SystemMessage(`
-                    You are a senior software engineer implementing an approved implementation plan.
+                    You are a senior software engineer implementing
+                    an approved implementation plan.
 
-                    Rules:
-                    - Follow the implementation plan.
-                    - Inspect a file before modifying it when it already exists.
-                    - Use repository tools instead of inventing repository content.
+                    The repository has ALREADY been researched.
+
+                    STRICT EXECUTION RULES:
+
+                    - Use REPOSITORY RESEARCH as your primary repository context.
+                    - Use IMPLEMENTATION PLAN as the source of implementation tasks.
+                    - Do NOT explore the repository from scratch.
+                    - Do NOT repeatedly list the repository root.
+                    - Start by reading files listed in filesToModify.
+                    - Read additional files only when directly necessary.
+                    - Once you understand a target file, modify it.
+                    - Prioritize implementation over exploration.
+                    - Never invent repository files.
                     - Keep changes minimal and focused.
                     - Preserve existing project conventions.
                     - Never modify environment files or secrets.
                     - Do not execute shell commands.
-                    - Do not delete files.
                     - Do not perform Git operations.
-                    - After implementing the plan, provide a concise summary of the changes made.
-                    
-                    IMPORTANT EXECUTION STRATEGY:
-
-                    - The repository has already been researched.
-                    - Use the provided research and implementation plan as your primary navigation information.
-                    - Do not explore the repository from scratch.
-                    - Do not list directories unless required information is missing.
-                    - Read only files that you intend to modify or need as direct dependencies.
-                    - Prioritize implementation over exploration.
-                    - Once you understand a target file, modify it.
-                    - Do not repeatedly search for alternative implementations.
-                    - You have a limited tool-call budget.
                 `),
 
                 new HumanMessage(`
@@ -278,44 +277,28 @@ export class CodingGraph {
 
                     ${ticket}
 
-                    REPOSITORY RESEARCH:
-                    
-                    ${research ?? 'No repository research available.'}
+                    VERIFIED REPOSITORY RESEARCH:
+
+                    ${JSON.stringify(
+                    research,
+                    null,
+                    2,
+                    )}
 
                     APPROVED IMPLEMENTATION PLAN:
 
                     ${JSON.stringify(plan, null, 2)}
 
-                    Implement this plan in the repository.
-
-                    Use the repository research to locate relevant files.
-                    Do not restart repository exploration from scratch.
-
-                    Read the specific files that you need before modifying them.
-                    Prioritize implementation over additional exploration.
+                    Implement the approved plan now.
                 `),
             ],
-            },
+        },
             {
                 recursionLimit: 30,
             },
         );
 
-        // const lastMessage = result.messages.at(-1);
-
-        // if(!lastMessage) {
-        //     throw new Error('No messages returned from coding graph');
-        // }
-
-        // if (!result.result) {
-        //     throw new Error(
-        //         'Coding graph did not produce a final result',
-        //     );
-        // }
-
-        // return result.result;
-
-        if(!result.summary){
+        if (!result.summary) {
             throw new Error(
                 'Cofding graph did not produce a finaly summary',
             );
